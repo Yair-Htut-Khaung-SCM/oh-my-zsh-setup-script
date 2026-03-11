@@ -34,7 +34,8 @@ Then close and reopen Git Bash.
 
 If `zsh` binary is missing, installer downloads zsh package from internet.
 It installs `zsh` into `/usr/bin` when writable, otherwise into `~/.local/gitbash-zsh/bin`.
-If that fails, it falls back to `winget` Git reinstall.
+If needed, installer also downloads `zstd` (via `winget`) to unpack the zsh package.
+If that still fails, it falls back to `winget` Git reinstall.
 
 ## Theme Selection
 

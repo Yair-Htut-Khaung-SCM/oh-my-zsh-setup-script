@@ -80,15 +80,73 @@ resolve_zsh_bin() {
   return 1
 }
 
+resolve_zstd_bin() {
+  local candidate
+  local win_path
+  local unix_path
+
+  if command -v zstd >/dev/null 2>&1; then
+    command -v zstd
+    return 0
+  fi
+
+  for candidate in \
+    "/c/Program Files/zstd/zstd.exe" \
+    "/c/Program Files (x86)/zstd/zstd.exe" \
+    "/c/ProgramData/chocolatey/bin/zstd.exe"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v where.exe >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+    win_path="$(where.exe zstd.exe 2>/dev/null | tr -d '\r' | sed -n '1p' || true)"
+    if [[ -n "$win_path" ]]; then
+      unix_path="$(cygpath -u "$win_path" 2>/dev/null || true)"
+      if [[ -x "$unix_path" ]]; then
+        printf '%s' "$unix_path"
+        return 0
+      fi
+    fi
+  fi
+
+  return 1
+}
+
+ensure_zstd_decompressor() {
+  if resolve_zstd_bin >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v winget.exe >/dev/null 2>&1 || command -v winget >/dev/null 2>&1; then
+    local winget_cmd
+    if command -v winget.exe >/dev/null 2>&1; then
+      winget_cmd="winget.exe"
+    else
+      winget_cmd="winget"
+    fi
+    echo "Installing zstd decompressor from internet..."
+    "$winget_cmd" install --id Meta.Zstandard -e --silent --disable-interactivity --accept-package-agreements --accept-source-agreements || true
+    if resolve_zstd_bin >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 install_zsh_from_msys_repo() {
   local base_url
   local index_html
   local pkg_name
   local tmp_pkg
+  local tmp_tar
   local tmp_dir
   local target_dir
   local zsh_exe
   local zsh_ver_exe
+  local zstd_bin
 
   base_url="https://repo.msys2.org/msys/x86_64/"
   echo "zsh is missing. Downloading zsh package from internet..."
@@ -125,9 +183,26 @@ install_zsh_from_msys_repo() {
     fi
   fi
 
-  tmp_dir="$(mktemp -d)"
-  if ! tar -xf "$tmp_pkg" -C "$tmp_dir"; then
+  if ! ensure_zstd_decompressor; then
     rm -f "$tmp_pkg"
+    return 1
+  fi
+
+  zstd_bin="$(resolve_zstd_bin || true)"
+  if [[ -z "$zstd_bin" ]]; then
+    rm -f "$tmp_pkg"
+    return 1
+  fi
+
+  tmp_tar="${tmp_pkg%.zst}"
+  if ! "$zstd_bin" -d -c "$tmp_pkg" > "$tmp_tar"; then
+    rm -f "$tmp_pkg" "$tmp_tar"
+    return 1
+  fi
+
+  tmp_dir="$(mktemp -d)"
+  if ! tar -xf "$tmp_tar" -C "$tmp_dir"; then
+    rm -f "$tmp_pkg" "$tmp_tar"
     rm -rf "$tmp_dir"
     return 1
   fi
@@ -135,7 +210,7 @@ install_zsh_from_msys_repo() {
   zsh_exe="$tmp_dir/usr/bin/zsh.exe"
   zsh_ver_exe="$(ls "$tmp_dir"/usr/bin/zsh-*.exe 2>/dev/null | head -n 1 || true)"
   if [[ ! -x "$zsh_exe" && -z "$zsh_ver_exe" ]]; then
-    rm -f "$tmp_pkg"
+    rm -f "$tmp_pkg" "$tmp_tar"
     rm -rf "$tmp_dir"
     return 1
   fi
@@ -150,7 +225,7 @@ install_zsh_from_msys_repo() {
   cp -f "$tmp_dir"/usr/bin/zsh*.exe "$target_dir"/ 2>/dev/null || true
   cp -f "$tmp_dir"/usr/bin/msys-zsh-*.dll "$target_dir"/ 2>/dev/null || true
 
-  rm -f "$tmp_pkg"
+  rm -f "$tmp_pkg" "$tmp_tar"
   rm -rf "$tmp_dir"
   hash -r
   return 0
