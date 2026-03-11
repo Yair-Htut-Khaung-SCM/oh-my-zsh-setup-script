@@ -744,6 +744,13 @@ else
   echo "AUTO_START_ZSH=0: leaving Git Bash startup unchanged."
 fi
 
+if [[ -f "$BASHRC" ]]; then
+  sed -i '1s/^\xEF\xBB\xBF//' "$BASHRC" 2>/dev/null || true
+fi
+if [[ -f "$ZSHRC" ]]; then
+  sed -i '1s/^\xEF\xBB\xBF//' "$ZSHRC" 2>/dev/null || true
+fi
+
 echo "[6/6] Done."
 echo "Close and reopen Git Bash. It should start zsh with Oh My Zsh + autosuggestions."
 echo "Autosuggestion tip: type part of a past command, then press Right Arrow (->) to accept."

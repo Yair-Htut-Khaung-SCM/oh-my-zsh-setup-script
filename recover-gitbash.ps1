@@ -11,7 +11,8 @@ if (Test-Path $bashrc) {
         '(?ms)^# >>> auto-start zsh >>>\r?\n.*?^# <<< auto-start zsh <<<\r?\n?',
         ''
     )
-    Set-Content $bashrc $txt -Encoding UTF8
+    $txt = [regex]::Replace($txt, '^\uFEFF', '')
+    [System.IO.File]::WriteAllText($bashrc, $txt, [System.Text.UTF8Encoding]::new($false))
 }
 
 Rename-Item "$userHome\.zshrc" '.zshrc.broken' -ErrorAction SilentlyContinue
