@@ -171,7 +171,7 @@ download_temp_zstd_bin() {
     return 1
   fi
 
-  zstd_path="$(ls "$extract_dir"/zstd-*/zstd.exe 2>/dev/null | head -n 1 || true)"
+  zstd_path="$(ls "$extract_dir"/zstd-*/zstd.exe "$extract_dir"/zstd-*/*/zstd.exe 2>/dev/null | head -n 1 || true)"
   if [[ -z "$zstd_path" || ! -x "$zstd_path" ]]; then
     rm -rf "$tmp_dir"
     return 1
@@ -247,33 +247,45 @@ install_zsh_from_msys_repo() {
     fi
   fi
 
-  zstd_bin="$(ensure_zstd_decompressor || true)"
-  if [[ -z "$zstd_bin" ]]; then
-    rm -f "$tmp_pkg"
-    return 1
-  fi
-
-  tmp_tar="${tmp_pkg%.zst}"
-  if ! "$zstd_bin" -d -c "$tmp_pkg" > "$tmp_tar"; then
-    rm -f "$tmp_pkg" "$tmp_tar"
-    cleanup_temp_zstd
-    return 1
-  fi
-
   tmp_dir="$(mktemp -d)"
-  if ! tar -xf "$tmp_tar" -C "$tmp_dir"; then
-    rm -f "$tmp_pkg" "$tmp_tar"
-    rm -rf "$tmp_dir"
+  if [[ -x "/c/Windows/System32/tar.exe" ]]; then
+    if ! /c/Windows/System32/tar.exe -xf "$tmp_pkg" -C "$tmp_dir"; then
+      rm -f "$tmp_pkg"
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+  else
+    zstd_bin="$(ensure_zstd_decompressor || true)"
+    if [[ -z "$zstd_bin" ]]; then
+      rm -f "$tmp_pkg"
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+
+    tmp_tar="${tmp_pkg%.zst}"
+    if ! "$zstd_bin" -d -c "$tmp_pkg" > "$tmp_tar"; then
+      rm -f "$tmp_pkg" "$tmp_tar"
+      rm -rf "$tmp_dir"
+      cleanup_temp_zstd
+      return 1
+    fi
+
+    if ! tar -xf "$tmp_tar" -C "$tmp_dir"; then
+      rm -f "$tmp_pkg" "$tmp_tar"
+      rm -rf "$tmp_dir"
+      cleanup_temp_zstd
+      return 1
+    fi
+
+    rm -f "$tmp_tar"
     cleanup_temp_zstd
-    return 1
   fi
 
   zsh_exe="$tmp_dir/usr/bin/zsh.exe"
   zsh_ver_exe="$(ls "$tmp_dir"/usr/bin/zsh-*.exe 2>/dev/null | head -n 1 || true)"
   if [[ ! -x "$zsh_exe" && -z "$zsh_ver_exe" ]]; then
-    rm -f "$tmp_pkg" "$tmp_tar"
+    rm -f "$tmp_pkg"
     rm -rf "$tmp_dir"
-    cleanup_temp_zstd
     return 1
   fi
 
@@ -287,9 +299,8 @@ install_zsh_from_msys_repo() {
   cp -f "$tmp_dir"/usr/bin/zsh*.exe "$target_dir"/ 2>/dev/null || true
   cp -f "$tmp_dir"/usr/bin/msys-zsh-*.dll "$target_dir"/ 2>/dev/null || true
 
-  rm -f "$tmp_pkg" "$tmp_tar"
+  rm -f "$tmp_pkg"
   rm -rf "$tmp_dir"
-  cleanup_temp_zstd
   hash -r
   return 0
 }
