@@ -114,23 +114,87 @@ resolve_zstd_bin() {
   return 1
 }
 
+ZSTD_TEMP_DIR=""
+
+cleanup_temp_zstd() {
+  if [[ -n "$ZSTD_TEMP_DIR" && -d "$ZSTD_TEMP_DIR" ]]; then
+    rm -rf "$ZSTD_TEMP_DIR"
+  fi
+  ZSTD_TEMP_DIR=""
+}
+
+download_temp_zstd_bin() {
+  local tmp_dir
+  local zip_path
+  local extract_dir
+  local zip_url
+  local win_zip
+  local win_extract
+  local zstd_path
+
+  tmp_dir="$(mktemp -d)"
+  zip_path="$tmp_dir/zstd.zip"
+  extract_dir="$tmp_dir/extracted"
+  mkdir -p "$extract_dir"
+  zip_url="https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip"
+
+  if command -v curl >/dev/null 2>&1; then
+    if ! curl -fsSL -o "$zip_path" "$zip_url"; then
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+  elif command -v wget >/dev/null 2>&1; then
+    if ! wget -qO "$zip_path" "$zip_url"; then
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+  else
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  if ! command -v powershell.exe >/dev/null 2>&1; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  if command -v cygpath >/dev/null 2>&1; then
+    win_zip="$(cygpath -w "$zip_path")"
+    win_extract="$(cygpath -w "$extract_dir")"
+  else
+    win_zip="$zip_path"
+    win_extract="$extract_dir"
+  fi
+
+  if ! powershell.exe -NoProfile -Command "Expand-Archive -Path '$win_zip' -DestinationPath '$win_extract' -Force" >/dev/null 2>&1; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  zstd_path="$(ls "$extract_dir"/zstd-*/zstd.exe 2>/dev/null | head -n 1 || true)"
+  if [[ -z "$zstd_path" || ! -x "$zstd_path" ]]; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  ZSTD_TEMP_DIR="$tmp_dir"
+  printf '%s' "$zstd_path"
+  return 0
+}
+
 ensure_zstd_decompressor() {
-  if resolve_zstd_bin >/dev/null 2>&1; then
+  local zstd_bin
+  zstd_bin="$(resolve_zstd_bin || true)"
+  if [[ -n "$zstd_bin" ]]; then
+    printf '%s' "$zstd_bin"
     return 0
   fi
 
-  if command -v winget.exe >/dev/null 2>&1 || command -v winget >/dev/null 2>&1; then
-    local winget_cmd
-    if command -v winget.exe >/dev/null 2>&1; then
-      winget_cmd="winget.exe"
-    else
-      winget_cmd="winget"
-    fi
-    echo "Installing zstd decompressor from internet..."
-    "$winget_cmd" install --id Meta.Zstandard -e --silent --disable-interactivity --accept-package-agreements --accept-source-agreements || true
-    if resolve_zstd_bin >/dev/null 2>&1; then
-      return 0
-    fi
+  echo "zstd not found. Downloading temporary decompressor..."
+  zstd_bin="$(download_temp_zstd_bin || true)"
+  if [[ -n "$zstd_bin" ]]; then
+    printf '%s' "$zstd_bin"
+    return 0
   fi
 
   return 1
@@ -183,12 +247,7 @@ install_zsh_from_msys_repo() {
     fi
   fi
 
-  if ! ensure_zstd_decompressor; then
-    rm -f "$tmp_pkg"
-    return 1
-  fi
-
-  zstd_bin="$(resolve_zstd_bin || true)"
+  zstd_bin="$(ensure_zstd_decompressor || true)"
   if [[ -z "$zstd_bin" ]]; then
     rm -f "$tmp_pkg"
     return 1
@@ -197,6 +256,7 @@ install_zsh_from_msys_repo() {
   tmp_tar="${tmp_pkg%.zst}"
   if ! "$zstd_bin" -d -c "$tmp_pkg" > "$tmp_tar"; then
     rm -f "$tmp_pkg" "$tmp_tar"
+    cleanup_temp_zstd
     return 1
   fi
 
@@ -204,6 +264,7 @@ install_zsh_from_msys_repo() {
   if ! tar -xf "$tmp_tar" -C "$tmp_dir"; then
     rm -f "$tmp_pkg" "$tmp_tar"
     rm -rf "$tmp_dir"
+    cleanup_temp_zstd
     return 1
   fi
 
@@ -212,6 +273,7 @@ install_zsh_from_msys_repo() {
   if [[ ! -x "$zsh_exe" && -z "$zsh_ver_exe" ]]; then
     rm -f "$tmp_pkg" "$tmp_tar"
     rm -rf "$tmp_dir"
+    cleanup_temp_zstd
     return 1
   fi
 
@@ -227,6 +289,7 @@ install_zsh_from_msys_repo() {
 
   rm -f "$tmp_pkg" "$tmp_tar"
   rm -rf "$tmp_dir"
+  cleanup_temp_zstd
   hash -r
   return 0
 }
