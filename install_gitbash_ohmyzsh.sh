@@ -20,9 +20,56 @@ theme_exists() {
 }
 
 resolve_zsh_bin() {
+  local candidate
+  local win_zsh_path
+  local unix_zsh_path
+
   if [[ -x "/usr/bin/zsh.exe" ]]; then
     printf '%s' "/usr/bin/zsh.exe"
     return 0
+  fi
+
+  for candidate in \
+    "$HOME/.local/gitbash-zsh/bin/zsh.exe" \
+    "/c/Program Files/Git/usr/bin/zsh.exe" \
+    "/c/Program Files (x86)/Git/usr/bin/zsh.exe" \
+    "/c/Users/${USERNAME:-}/AppData/Local/Programs/Git/usr/bin/zsh.exe"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+
+  for candidate in \
+    "$HOME/.local/gitbash-zsh/bin/zsh-"*.exe \
+    /usr/bin/zsh-*.exe \
+    "/c/Program Files/Git/usr/bin/zsh-"*.exe \
+    "/c/Program Files (x86)/Git/usr/bin/zsh-"*.exe \
+    "/c/Users/${USERNAME:-}/AppData/Local/Programs/Git/usr/bin/zsh-"*.exe; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v where.exe >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+    win_zsh_path="$(where.exe zsh.exe 2>/dev/null | tr -d '\r' | sed -n '1p' || true)"
+    if [[ -n "$win_zsh_path" ]]; then
+      unix_zsh_path="$(cygpath -u "$win_zsh_path" 2>/dev/null || true)"
+      if [[ -x "$unix_zsh_path" ]]; then
+        printf '%s' "$unix_zsh_path"
+        return 0
+      fi
+    fi
+
+    win_zsh_path="$(where.exe zsh-*.exe 2>/dev/null | tr -d '\r' | sed -n '1p' || true)"
+    if [[ -n "$win_zsh_path" ]]; then
+      unix_zsh_path="$(cygpath -u "$win_zsh_path" 2>/dev/null || true)"
+      if [[ -x "$unix_zsh_path" ]]; then
+        printf '%s' "$unix_zsh_path"
+        return 0
+      fi
+    fi
   fi
 
   if command -v zsh >/dev/null 2>&1; then
@@ -33,42 +80,124 @@ resolve_zsh_bin() {
   return 1
 }
 
+install_zsh_from_msys_repo() {
+  local base_url
+  local index_html
+  local pkg_name
+  local tmp_pkg
+  local tmp_dir
+  local target_dir
+  local zsh_exe
+  local zsh_ver_exe
+
+  base_url="https://repo.msys2.org/msys/x86_64/"
+  echo "zsh is missing. Downloading zsh package from internet..."
+
+  if command -v curl >/dev/null 2>&1; then
+    if ! index_html="$(curl -fsSL "$base_url")"; then
+      return 1
+    fi
+  elif command -v wget >/dev/null 2>&1; then
+    if ! index_html="$(wget -qO- "$base_url")"; then
+      return 1
+    fi
+  else
+    return 1
+  fi
+
+  pkg_name="$(printf '%s' "$index_html" | tr '"' '\n' | grep -E '^zsh-[0-9].*-x86_64\.pkg\.tar\.zst$' | sort -V | tail -n 1)"
+  if [[ -z "$pkg_name" ]]; then
+    return 1
+  fi
+
+  tmp_pkg="$(mktemp -u)"
+  tmp_pkg="${tmp_pkg}.pkg.tar.zst"
+
+  if command -v curl >/dev/null 2>&1; then
+    if ! curl -fsSL -o "$tmp_pkg" "${base_url}${pkg_name}"; then
+      rm -f "$tmp_pkg"
+      return 1
+    fi
+  else
+    if ! wget -qO "$tmp_pkg" "${base_url}${pkg_name}"; then
+      rm -f "$tmp_pkg"
+      return 1
+    fi
+  fi
+
+  tmp_dir="$(mktemp -d)"
+  if ! tar -xf "$tmp_pkg" -C "$tmp_dir"; then
+    rm -f "$tmp_pkg"
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  zsh_exe="$tmp_dir/usr/bin/zsh.exe"
+  zsh_ver_exe="$(ls "$tmp_dir"/usr/bin/zsh-*.exe 2>/dev/null | head -n 1 || true)"
+  if [[ ! -x "$zsh_exe" && -z "$zsh_ver_exe" ]]; then
+    rm -f "$tmp_pkg"
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  if [[ -w /usr/bin ]]; then
+    target_dir="/usr/bin"
+  else
+    target_dir="$HOME/.local/gitbash-zsh/bin"
+    mkdir -p "$target_dir"
+  fi
+
+  cp -f "$tmp_dir"/usr/bin/zsh*.exe "$target_dir"/ 2>/dev/null || true
+  cp -f "$tmp_dir"/usr/bin/msys-zsh-*.dll "$target_dir"/ 2>/dev/null || true
+
+  rm -f "$tmp_pkg"
+  rm -rf "$tmp_dir"
+  hash -r
+  return 0
+}
+
 install_zsh_if_missing() {
   if resolve_zsh_bin >/dev/null 2>&1; then
     return 0
   fi
 
-  if [[ -x "/usr/bin/zsh-5.9.exe" ]]; then
-    echo "zsh.exe missing but zsh-5.9.exe exists. Restoring zsh.exe..."
-    cp -f "/usr/bin/zsh-5.9.exe" "/usr/bin/zsh.exe"
+  if install_zsh_from_msys_repo && resolve_zsh_bin >/dev/null 2>&1; then
     return 0
   fi
 
-  local zsh_candidate
-  zsh_candidate="$(ls /usr/bin/zsh-*.exe 2>/dev/null | head -n 1 || true)"
-  if [[ -n "$zsh_candidate" && -x "$zsh_candidate" ]]; then
-    echo "zsh.exe missing but found $zsh_candidate. Restoring zsh.exe..."
-    cp -f "$zsh_candidate" "/usr/bin/zsh.exe"
-    return 0
-  fi
+  run_with_timeout() {
+    local seconds="$1"
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "$seconds" "$@"
+    else
+      "$@"
+    fi
+  }
 
   if command -v winget.exe >/dev/null 2>&1 || command -v winget >/dev/null 2>&1; then
-    echo "zsh missing in Git for Windows. Repairing Git installation..."
+    echo "Direct zsh package install failed. Trying Git installer fallback..."
+    local winget_cmd
     if command -v winget.exe >/dev/null 2>&1; then
-      winget.exe repair --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements || true
-      winget.exe install --id Git.Git -e --force --silent --accept-package-agreements --accept-source-agreements || true
+      winget_cmd="winget.exe"
     else
-      winget repair --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements || true
-      winget install --id Git.Git -e --force --silent --accept-package-agreements --accept-source-agreements || true
+      winget_cmd="winget"
     fi
 
+    run_with_timeout 900 "$winget_cmd" install --id Git.Git -e --force --silent --disable-interactivity --accept-package-agreements --accept-source-agreements || true
     if resolve_zsh_bin >/dev/null 2>&1; then
       return 0
     fi
+
+    echo "Install command finished, but zsh is still not visible in this shell."
+    echo "Close all Git Bash windows, open a new one, and run ./bootstrap.sh again."
+    echo "If it still fails, run this manually in PowerShell as Administrator:"
+    echo "  winget install --id Git.Git -e --force --accept-package-agreements --accept-source-agreements"
+    return 1
   fi
 
-  echo "Could not restore zsh automatically."
-  echo "Please reinstall Git for Windows, then rerun this script."
+  echo "winget not found, so zsh cannot be downloaded automatically."
+  echo "Install Git for Windows from internet, then rerun ./bootstrap.sh."
   return 1
 }
 
@@ -248,6 +377,10 @@ if [[ -z "$ZSH_BIN" ]]; then
   exit 1
 fi
 
+if [[ "$ZSH_BIN" == *zsh-*.exe ]]; then
+  echo "Using versioned zsh binary: $ZSH_BIN"
+fi
+
 ZSH_DIR="$(dirname "$ZSH_BIN")"
 if ! command -v zsh >/dev/null 2>&1; then
   export PATH="$PATH:$ZSH_DIR"
@@ -309,6 +442,9 @@ fi
 if [[ -f "$BASHRC" ]]; then
   {
     printf '\n%s\n' "$START_MARKER"
+    printf 'if ! command -v zsh >/dev/null 2>&1 && [ -x "%s" ]; then\n' "$ZSH_BIN"
+    printf '  alias zsh="%s"\n' "$ZSH_BIN"
+    printf 'fi\n'
     printf 'if [ -z "${ZSH_VERSION-}" ] && [ -t 1 ] && [ -x "%s" ]; then\n' "$ZSH_BIN"
     printf '  exec "%s"\n' "$ZSH_BIN"
     printf 'fi\n'
@@ -317,6 +453,9 @@ if [[ -f "$BASHRC" ]]; then
 else
   {
     printf '%s\n' "$START_MARKER"
+    printf 'if ! command -v zsh >/dev/null 2>&1 && [ -x "%s" ]; then\n' "$ZSH_BIN"
+    printf '  alias zsh="%s"\n' "$ZSH_BIN"
+    printf 'fi\n'
     printf 'if [ -z "${ZSH_VERSION-}" ] && [ -t 1 ] && [ -x "%s" ]; then\n' "$ZSH_BIN"
     printf '  exec "%s"\n' "$ZSH_BIN"
     printf 'fi\n'

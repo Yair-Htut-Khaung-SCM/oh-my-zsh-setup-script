@@ -19,7 +19,7 @@ It sets up:
 - Windows + Git Bash
 - `git`
 - `curl` or `wget`
-- `winget` (only needed if `zsh.exe` is missing from Git for Windows)
+- `winget` (optional fallback if direct zsh package install fails)
 
 ## Install
 
@@ -31,6 +31,10 @@ chmod +x bootstrap.sh install_gitbash_ohmyzsh.sh
 ```
 
 Then close and reopen Git Bash.
+
+If `zsh` binary is missing, installer downloads zsh package from internet.
+It installs `zsh` into `/usr/bin` when writable, otherwise into `~/.local/gitbash-zsh/bin`.
+If that fails, it falls back to `winget` Git reinstall.
 
 ## Theme Selection
 
@@ -62,3 +66,18 @@ ZSH_THEME_CHOICE=mytheme ZSH_THEME_URL="https://example.com/mytheme.zsh-theme" .
 
 - Some theme screenshots are from other terminals/fonts, so appearance may differ in Git Bash.
 - Git branch segment appears only when you are inside a git repository.
+
+## Uninstall
+
+From Git Bash in this folder:
+
+```bash
+chmod +x uninstall.sh
+./uninstall.sh
+```
+
+To also remove zsh binaries under `/usr/bin` (advanced):
+
+```bash
+./uninstall.sh --remove-system-zsh
+```
