@@ -29,14 +29,17 @@ From Git Bash in this folder:
 chmod +x bootstrap.sh install_gitbash_ohmyzsh.sh
 ./bootstrap.sh
 ```
+If zsh download failed with errors
+Try run git batch as Admin
+
+```bash
+cd "path/to/oh-my-zsh-setup-script"
+chmod +x bootstrap.sh install_gitbash_ohmyzsh.sh
+./bootstrap.sh
+```
 
 Then close and reopen Git Bash.
 
-If you want to install without modifying Git Bash startup, run:
-
-```bash
-AUTO_START_ZSH=0 ./bootstrap.sh
-```
 
 If `zsh` binary is missing, installer downloads zsh package from internet.
 It installs `zsh` into `/usr/bin` when writable, otherwise into `~/.local/gitbash-zsh/bin`.
@@ -64,11 +67,6 @@ After install, suggestions appear in faded text while you type.
 
 Note: typing `>` is not the same as Right Arrow.
 
-## Non-Interactive Example
-
-```bash
-ZSH_THEME_CHOICE=mytheme ZSH_THEME_URL="https://example.com/mytheme.zsh-theme" ./bootstrap.sh
-```
 
 ## Notes
 
