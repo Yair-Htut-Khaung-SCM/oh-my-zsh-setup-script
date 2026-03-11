@@ -114,6 +114,40 @@ resolve_zstd_bin() {
   return 1
 }
 
+resolve_windows_tar_bin() {
+  local win_path
+  local unix_path
+  local candidate
+
+  if command -v where.exe >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+    while IFS= read -r win_path; do
+      win_path="${win_path//$'\r'/}"
+      case "${win_path,,}" in
+        *"\\program files\\git\\usr\\bin\\tar.exe")
+          continue
+          ;;
+      esac
+      unix_path="$(cygpath -u "$win_path" 2>/dev/null || true)"
+      if [[ -x "$unix_path" ]]; then
+        printf '%s' "$unix_path"
+        return 0
+      fi
+    done < <(where.exe tar.exe 2>/dev/null || true)
+  fi
+
+  for candidate in \
+    "/c/Windows/System32/tar.exe" \
+    "/c/WINDOWS/System32/tar.exe" \
+    "/c/Windows/Sysnative/tar.exe"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 ZSTD_TEMP_DIR=""
 
 cleanup_temp_zstd() {
@@ -186,15 +220,19 @@ ensure_zstd_decompressor() {
   local zstd_bin
   zstd_bin="$(resolve_zstd_bin || true)"
   if [[ -n "$zstd_bin" ]]; then
-    printf '%s' "$zstd_bin"
-    return 0
+    if "$zstd_bin" --version >/dev/null 2>&1 || "$zstd_bin" -V >/dev/null 2>&1; then
+      printf '%s' "$zstd_bin"
+      return 0
+    fi
   fi
 
-  echo "zstd not found. Downloading temporary decompressor..."
+  echo "zstd not found. Downloading temporary decompressor..." >&2
   zstd_bin="$(download_temp_zstd_bin || true)"
   if [[ -n "$zstd_bin" ]]; then
-    printf '%s' "$zstd_bin"
-    return 0
+    if "$zstd_bin" --version >/dev/null 2>&1 || "$zstd_bin" -V >/dev/null 2>&1; then
+      printf '%s' "$zstd_bin"
+      return 0
+    fi
   fi
 
   return 1
@@ -207,10 +245,11 @@ install_zsh_from_msys_repo() {
   local tmp_pkg
   local tmp_tar
   local tmp_dir
-  local target_dir
+  local target_prefix
   local zsh_exe
   local zsh_ver_exe
   local zstd_bin
+  local win_tar_bin
 
   base_url="https://repo.msys2.org/msys/x86_64/"
   echo "zsh is missing. Downloading zsh package from internet..."
@@ -248,8 +287,9 @@ install_zsh_from_msys_repo() {
   fi
 
   tmp_dir="$(mktemp -d)"
-  if [[ -x "/c/Windows/System32/tar.exe" ]]; then
-    if ! /c/Windows/System32/tar.exe -xf "$tmp_pkg" -C "$tmp_dir"; then
+  win_tar_bin="$(resolve_windows_tar_bin || true)"
+  if [[ -n "$win_tar_bin" ]]; then
+    if ! "$win_tar_bin" -xf "$tmp_pkg" -C "$tmp_dir"; then
       rm -f "$tmp_pkg"
       rm -rf "$tmp_dir"
       return 1
@@ -289,15 +329,29 @@ install_zsh_from_msys_repo() {
     return 1
   fi
 
-  if [[ -w /usr/bin ]]; then
-    target_dir="/usr/bin"
+  if [[ -w /usr/bin && -w /usr/lib && -w /usr/share ]]; then
+    target_prefix="/usr"
   else
-    target_dir="$HOME/.local/gitbash-zsh/bin"
-    mkdir -p "$target_dir"
+    target_prefix="$HOME/.local/gitbash-zsh"
   fi
 
-  cp -f "$tmp_dir"/usr/bin/zsh*.exe "$target_dir"/ 2>/dev/null || true
-  cp -f "$tmp_dir"/usr/bin/msys-zsh-*.dll "$target_dir"/ 2>/dev/null || true
+  mkdir -p "$target_prefix/bin" "$target_prefix/lib" "$target_prefix/share"
+
+  cp -f "$tmp_dir"/usr/bin/zsh*.exe "$target_prefix/bin/" 2>/dev/null || true
+  cp -f "$tmp_dir"/usr/bin/msys-zsh-*.dll "$target_prefix/bin/" 2>/dev/null || true
+
+  if [[ -d "$tmp_dir/usr/lib/zsh" ]]; then
+    cp -R "$tmp_dir/usr/lib/zsh" "$target_prefix/lib/" 2>/dev/null || true
+  fi
+
+  if [[ -d "$tmp_dir/usr/share/zsh" ]]; then
+    cp -R "$tmp_dir/usr/share/zsh" "$target_prefix/share/" 2>/dev/null || true
+  fi
+
+  if [[ "$target_prefix" != "/usr" && -d "$tmp_dir/etc/zsh" ]]; then
+    mkdir -p "$target_prefix/etc"
+    cp -R "$tmp_dir/etc/zsh" "$target_prefix/etc/" 2>/dev/null || true
+  fi
 
   rm -f "$tmp_pkg"
   rm -rf "$tmp_dir"
@@ -305,9 +359,76 @@ install_zsh_from_msys_repo() {
   return 0
 }
 
+zsh_runtime_files_ok() {
+  local zsh_bin="$1"
+
+  if [[ "$zsh_bin" == "$HOME/.local/gitbash-zsh/bin/"* ]]; then
+    [[ -d "$HOME/.local/gitbash-zsh/lib/zsh" && -d "$HOME/.local/gitbash-zsh/share/zsh/functions" ]]
+    return $?
+  fi
+
+  [[ -d "/usr/lib/zsh" && -d "/usr/share/zsh/functions" ]]
+}
+
+ensure_local_zsh_runtime_block() {
+  local zshrc="$1"
+  local start_marker
+  local end_marker
+  local block
+  local tmp
+  local inserted
+  local line
+
+  start_marker="# >>> local zsh runtime >>>"
+  end_marker="# <<< local zsh runtime <<<"
+  block="$(cat <<'EOF'
+# >>> local zsh runtime >>>
+if [[ -d "$HOME/.local/gitbash-zsh/lib/zsh" ]]; then
+  typeset -a _local_mod_paths
+  for _local_mod_dir in "$HOME"/.local/gitbash-zsh/lib/zsh/*/zsh; do
+    [[ -d "$_local_mod_dir" ]] && _local_mod_paths+=("$_local_mod_dir")
+  done
+  if (( ${#_local_mod_paths[@]} )); then
+    module_path=("${_local_mod_paths[@]}" "${module_path[@]}")
+  fi
+fi
+if [[ -d "$HOME/.local/gitbash-zsh/share/zsh/functions" ]]; then
+  fpath=("$HOME/.local/gitbash-zsh/share/zsh/functions" "$HOME/.local/gitbash-zsh/share/zsh/site-functions" "${fpath[@]}")
+fi
+unset _local_mod_dir _local_mod_paths
+# <<< local zsh runtime <<<
+EOF
+)"
+
+  if [[ -f "$zshrc" ]]; then
+    sed -i "/^${start_marker//\//\\/}$/,/^${end_marker//\//\\/}$/d" "$zshrc"
+  fi
+
+  tmp="$(mktemp)"
+  inserted=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$inserted" == "0" && "$line" == *"oh-my-zsh.sh"* ]]; then
+      printf '%s\n' "$block" >> "$tmp"
+      inserted=1
+    fi
+    printf '%s\n' "$line" >> "$tmp"
+  done < "$zshrc"
+
+  if [[ "$inserted" == "0" ]]; then
+    printf '\n%s\n' "$block" >> "$tmp"
+  fi
+
+  mv "$tmp" "$zshrc"
+}
+
 install_zsh_if_missing() {
-  if resolve_zsh_bin >/dev/null 2>&1; then
-    return 0
+  local existing_zsh_bin
+  existing_zsh_bin="$(resolve_zsh_bin || true)"
+  if [[ -n "$existing_zsh_bin" ]]; then
+    if zsh_runtime_files_ok "$existing_zsh_bin"; then
+      return 0
+    fi
+    echo "zsh binary found, but runtime files are missing. Repairing zsh runtime..."
   fi
 
   if install_zsh_from_msys_repo && resolve_zsh_bin >/dev/null 2>&1; then
@@ -348,6 +469,11 @@ install_zsh_if_missing() {
   echo "winget not found, so zsh cannot be downloaded automatically."
   echo "Install Git for Windows from internet, then rerun ./bootstrap.sh."
   return 1
+}
+
+zsh_runtime_healthy() {
+  local zsh_bin="$1"
+  "$zsh_bin" -fc 'zmodload zsh/zle >/dev/null 2>&1 && zmodload zsh/parameter >/dev/null 2>&1 && zmodload zsh/datetime >/dev/null 2>&1'
 }
 
 normalize_theme_url() {
@@ -530,12 +656,6 @@ if [[ "$ZSH_BIN" == *zsh-*.exe ]]; then
   echo "Using versioned zsh binary: $ZSH_BIN"
 fi
 
-ZSH_DIR="$(dirname "$ZSH_BIN")"
-if ! command -v zsh >/dev/null 2>&1; then
-  export PATH="$PATH:$ZSH_DIR"
-  hash -r
-fi
-
 echo "[3/6] Installing Oh My Zsh..."
 if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
   git clone --depth 1 https://github.com/ohmyzsh/ohmyzsh.git "$HOME/.oh-my-zsh"
@@ -564,6 +684,8 @@ if [[ ! -f "$ZSHRC" ]]; then
   cp "$HOME/.oh-my-zsh/templates/zshrc.zsh-template" "$ZSHRC"
 fi
 
+ensure_local_zsh_runtime_block "$ZSHRC"
+
 if grep -Eq '^[[:space:]]*plugins=\(' "$ZSHRC"; then
   if ! grep -Eq '^[[:space:]]*plugins=.*\bzsh-autosuggestions\b' "$ZSHRC"; then
     sed -i -E '0,/^[[:space:]]*plugins=\(([^)]*)\)/s//plugins=(\1 zsh-autosuggestions)/' "$ZSHRC"
@@ -588,28 +710,38 @@ if [[ -f "$BASHRC" ]]; then
   sed -i "/^${START_MARKER//\//\\/}$/,/^${END_MARKER//\//\\/}$/d" "$BASHRC"
 fi
 
-if [[ -f "$BASHRC" ]]; then
-  {
-    printf '\n%s\n' "$START_MARKER"
-    printf 'if ! command -v zsh >/dev/null 2>&1 && [ -x "%s" ]; then\n' "$ZSH_BIN"
-    printf '  alias zsh="%s"\n' "$ZSH_BIN"
-    printf 'fi\n'
-    printf 'if [ -z "${ZSH_VERSION-}" ] && [ -t 1 ] && [ -x "%s" ]; then\n' "$ZSH_BIN"
-    printf '  exec "%s"\n' "$ZSH_BIN"
-    printf 'fi\n'
-    printf '%s\n' "$END_MARKER"
-  } >> "$BASHRC"
+AUTO_START_ZSH="${AUTO_START_ZSH:-1}"
+if [[ "$AUTO_START_ZSH" == "1" ]]; then
+  if zsh_runtime_healthy "$ZSH_BIN"; then
+    if [[ -f "$BASHRC" ]]; then
+      {
+        printf '\n%s\n' "$START_MARKER"
+        printf 'if ! command -v zsh >/dev/null 2>&1 && [ -x "%s" ]; then\n' "$ZSH_BIN"
+        printf '  alias zsh="%s"\n' "$ZSH_BIN"
+        printf 'fi\n'
+        printf 'if [ -z "${ZSH_VERSION-}" ] && [ -t 1 ] && [ -x "%s" ]; then\n' "$ZSH_BIN"
+        printf '  exec "%s"\n' "$ZSH_BIN"
+        printf 'fi\n'
+        printf '%s\n' "$END_MARKER"
+      } >> "$BASHRC"
+    else
+      {
+        printf '%s\n' "$START_MARKER"
+        printf 'if ! command -v zsh >/dev/null 2>&1 && [ -x "%s" ]; then\n' "$ZSH_BIN"
+        printf '  alias zsh="%s"\n' "$ZSH_BIN"
+        printf 'fi\n'
+        printf 'if [ -z "${ZSH_VERSION-}" ] && [ -t 1 ] && [ -x "%s" ]; then\n' "$ZSH_BIN"
+        printf '  exec "%s"\n' "$ZSH_BIN"
+        printf 'fi\n'
+        printf '%s\n' "$END_MARKER"
+      } > "$BASHRC"
+    fi
+  else
+    echo "Skipping auto-start zsh block: runtime modules failed validation."
+    echo "You can still run zsh manually after fixing runtime files."
+  fi
 else
-  {
-    printf '%s\n' "$START_MARKER"
-    printf 'if ! command -v zsh >/dev/null 2>&1 && [ -x "%s" ]; then\n' "$ZSH_BIN"
-    printf '  alias zsh="%s"\n' "$ZSH_BIN"
-    printf 'fi\n'
-    printf 'if [ -z "${ZSH_VERSION-}" ] && [ -t 1 ] && [ -x "%s" ]; then\n' "$ZSH_BIN"
-    printf '  exec "%s"\n' "$ZSH_BIN"
-    printf 'fi\n'
-    printf '%s\n' "$END_MARKER"
-  } > "$BASHRC"
+  echo "AUTO_START_ZSH=0: leaving Git Bash startup unchanged."
 fi
 
 echo "[6/6] Done."

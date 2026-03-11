@@ -32,9 +32,16 @@ chmod +x bootstrap.sh install_gitbash_ohmyzsh.sh
 
 Then close and reopen Git Bash.
 
+If you want to install without modifying Git Bash startup, run:
+
+```bash
+AUTO_START_ZSH=0 ./bootstrap.sh
+```
+
 If `zsh` binary is missing, installer downloads zsh package from internet.
 It installs `zsh` into `/usr/bin` when writable, otherwise into `~/.local/gitbash-zsh/bin`.
 If needed, installer downloads a temporary `zstd.exe` to unpack the zsh package (no permanent zstd install).
+If zsh binary exists but runtime modules are missing, installer repairs runtime files automatically.
 If that still fails, it falls back to `winget` Git reinstall.
 
 ## Theme Selection
@@ -81,4 +88,12 @@ To also remove zsh binaries under `/usr/bin` (advanced):
 
 ```bash
 ./uninstall.sh --remove-system-zsh
+```
+
+## Recovery (PowerShell)
+
+If Git Bash cannot open due to a broken zsh auto-start block, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\recover-gitbash.ps1
 ```
