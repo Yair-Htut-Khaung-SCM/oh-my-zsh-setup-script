@@ -19,6 +19,59 @@ theme_exists() {
   [[ -f "$HOME/.oh-my-zsh/themes/${theme}.zsh-theme" ]] || [[ -f "$HOME/.oh-my-zsh/custom/themes/${theme}.zsh-theme" ]]
 }
 
+resolve_zsh_bin() {
+  if [[ -x "/usr/bin/zsh.exe" ]]; then
+    printf '%s' "/usr/bin/zsh.exe"
+    return 0
+  fi
+
+  if command -v zsh >/dev/null 2>&1; then
+    command -v zsh
+    return 0
+  fi
+
+  return 1
+}
+
+install_zsh_if_missing() {
+  if resolve_zsh_bin >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ -x "/usr/bin/zsh-5.9.exe" ]]; then
+    echo "zsh.exe missing but zsh-5.9.exe exists. Restoring zsh.exe..."
+    cp -f "/usr/bin/zsh-5.9.exe" "/usr/bin/zsh.exe"
+    return 0
+  fi
+
+  local zsh_candidate
+  zsh_candidate="$(ls /usr/bin/zsh-*.exe 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$zsh_candidate" && -x "$zsh_candidate" ]]; then
+    echo "zsh.exe missing but found $zsh_candidate. Restoring zsh.exe..."
+    cp -f "$zsh_candidate" "/usr/bin/zsh.exe"
+    return 0
+  fi
+
+  if command -v winget.exe >/dev/null 2>&1 || command -v winget >/dev/null 2>&1; then
+    echo "zsh missing in Git for Windows. Repairing Git installation..."
+    if command -v winget.exe >/dev/null 2>&1; then
+      winget.exe repair --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements || true
+      winget.exe install --id Git.Git -e --force --silent --accept-package-agreements --accept-source-agreements || true
+    else
+      winget repair --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements || true
+      winget install --id Git.Git -e --force --silent --accept-package-agreements --accept-source-agreements || true
+    fi
+
+    if resolve_zsh_bin >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  echo "Could not restore zsh automatically."
+  echo "Please reinstall Git for Windows, then rerun this script."
+  return 1
+}
+
 normalize_theme_url() {
   local url="$1"
   if [[ "$url" =~ ^https://github\.com/([^/]+)/([^/]+)/blob/(.+)$ ]]; then
@@ -185,27 +238,25 @@ if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
 fi
 
 echo "[2/6] Ensuring zsh is installed..."
+if ! install_zsh_if_missing; then
+  exit 1
+fi
+
+ZSH_BIN="$(resolve_zsh_bin || true)"
+if [[ -z "$ZSH_BIN" ]]; then
+  echo "zsh install step finished but no zsh binary was found."
+  exit 1
+fi
+
+ZSH_DIR="$(dirname "$ZSH_BIN")"
 if ! command -v zsh >/dev/null 2>&1; then
-  if command -v pacman >/dev/null 2>&1; then
-    pacman -Sy --noconfirm zsh
-  else
-    echo "zsh is not installed and pacman is unavailable."
-    echo "Install zsh first, then rerun this script."
-    exit 1
-  fi
+  export PATH="$PATH:$ZSH_DIR"
+  hash -r
 fi
 
 echo "[3/6] Installing Oh My Zsh..."
 if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
-  export RUNZSH=no
-  export CHSH=no
-  export KEEP_ZSHRC=yes
-
-  if command -v curl >/dev/null 2>&1; then
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-  else
-    sh -c "$(wget -qO- https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-  fi
+  git clone --depth 1 https://github.com/ohmyzsh/ohmyzsh.git "$HOME/.oh-my-zsh"
 else
   echo "Oh My Zsh already installed."
 fi
@@ -250,21 +301,24 @@ echo "Theme set to: $CHOSEN_THEME"
 BASHRC="$HOME/.bashrc"
 START_MARKER="# >>> auto-start zsh >>>"
 END_MARKER="# <<< auto-start zsh <<<"
+
 if [[ -f "$BASHRC" ]]; then
-  if ! grep -Fq "$START_MARKER" "$BASHRC"; then
-    {
-      printf '\n%s\n' "$START_MARKER"
-      printf 'if [ -z "${ZSH_VERSION-}" ] && [ -t 1 ] && command -v zsh >/dev/null 2>&1; then\n'
-      printf '  exec zsh -l\n'
-      printf 'fi\n'
-      printf '%s\n' "$END_MARKER"
-    } >> "$BASHRC"
-  fi
+  sed -i "/^${START_MARKER//\//\\/}$/,/^${END_MARKER//\//\\/}$/d" "$BASHRC"
+fi
+
+if [[ -f "$BASHRC" ]]; then
+  {
+    printf '\n%s\n' "$START_MARKER"
+    printf 'if [ -z "${ZSH_VERSION-}" ] && [ -t 1 ] && [ -x "%s" ]; then\n' "$ZSH_BIN"
+    printf '  exec "%s"\n' "$ZSH_BIN"
+    printf 'fi\n'
+    printf '%s\n' "$END_MARKER"
+  } >> "$BASHRC"
 else
   {
     printf '%s\n' "$START_MARKER"
-    printf 'if [ -z "${ZSH_VERSION-}" ] && [ -t 1 ] && command -v zsh >/dev/null 2>&1; then\n'
-    printf '  exec zsh -l\n'
+    printf 'if [ -z "${ZSH_VERSION-}" ] && [ -t 1 ] && [ -x "%s" ]; then\n' "$ZSH_BIN"
+    printf '  exec "%s"\n' "$ZSH_BIN"
     printf 'fi\n'
     printf '%s\n' "$END_MARKER"
   } > "$BASHRC"

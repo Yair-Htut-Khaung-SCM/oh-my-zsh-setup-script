@@ -19,7 +19,7 @@ It sets up:
 - Windows + Git Bash
 - `git`
 - `curl` or `wget`
-- `pacman` (used to install `zsh` if missing)
+- `winget` (only needed if `zsh.exe` is missing from Git for Windows)
 
 ## Install
 
