@@ -250,6 +250,7 @@ install_zsh_from_msys_repo() {
   local zsh_ver_exe
   local zstd_bin
   local win_tar_bin
+  local extracted
 
   base_url="https://repo.msys2.org/msys/x86_64/"
   echo "zsh is missing. Downloading zsh package from internet..."
@@ -287,14 +288,17 @@ install_zsh_from_msys_repo() {
   fi
 
   tmp_dir="$(mktemp -d)"
+  extracted=0
   win_tar_bin="$(resolve_windows_tar_bin || true)"
   if [[ -n "$win_tar_bin" ]]; then
-    if ! "$win_tar_bin" -xf "$tmp_pkg" -C "$tmp_dir"; then
-      rm -f "$tmp_pkg"
-      rm -rf "$tmp_dir"
-      return 1
+    if "$win_tar_bin" -xf "$tmp_pkg" -C "$tmp_dir"; then
+      extracted=1
+    else
+      echo "Windows tar could not extract zstd package, falling back to temporary zstd..." >&2
     fi
-  else
+  fi
+
+  if [[ "$extracted" == "0" ]]; then
     zstd_bin="$(ensure_zstd_decompressor || true)"
     if [[ -z "$zstd_bin" ]]; then
       rm -f "$tmp_pkg"
